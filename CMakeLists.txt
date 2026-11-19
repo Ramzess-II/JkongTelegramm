@@ -1,0 +1,9 @@
+# The following five lines of boilerplate have to be in your project's
+# CMakeLists in this exact order for cmake to work correctly
+cmake_minimum_required(VERSION 3.16)
+
+# Р’РµСЂСЃРёСЏ РїСЂРѕС€РёРІРєРё: РІРёРґРЅР° РІ /settings Рё РЅР° РІРµР±-СЃС‚СЂР°РЅРёС†Рµ. РЈРІРµР»РёС‡РёРІР°Р№С‚Рµ РїСЂРё РєР°Р¶РґРѕРј РѕР±РЅРѕРІР»РµРЅРёРё.
+set(PROJECT_VER "1.3.2")
+
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(JkongTelegramm)

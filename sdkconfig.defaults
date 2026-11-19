@@ -1,0 +1,28 @@
+CONFIG_IDF_TARGET="esp32s3"
+
+# ESP32-S3 Pico: 16 МБ флеш, берём 4 МБ с запасом.
+# Два слота прошивки по 1.875 МБ для обновления по воздуху (partitions.csv).
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Откат: новая прошивка должна подтвердить себя, иначе загрузчик вернёт старую
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# Watchdog: зависшая задача -> перезагрузка. В ESP-IDF 5.5 максимум 60 с: большее значение молча
+# отбрасывается и остаётся 5 с — тогда задачи Telegram (ждут до 35 с) роняют плату через 6.5 с после старта.
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_INIT=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=60
+CONFIG_ESP_TASK_WDT_PANIC=y
+CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT=y
+
+# HTTPS к api.telegram.org
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS=y
+
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=4096
+
+# Сокеты: веб-сервер (5 клиентов + 2 служебных), Telegram (приём + отправка + скачивание прошивки), DNS/SNTP.
+# При 10 открытые вкладки браузера занимали всё, и Telegram не мог отправить сообщение.
+CONFIG_LWIP_MAX_SOCKETS=16
