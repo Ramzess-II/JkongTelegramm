@@ -85,3 +85,6 @@ main/secrets.h
 
 # Raw Claude Code chat history (contains personal data, copy manually)
 .claude-history/
+
+# Готовые прошивки для копирования (не исходники)
+release/

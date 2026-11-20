@@ -118,18 +118,48 @@ static bool is_night(int h)
     return h >= a && h < b;
 }
 
-static void notify_alarms(uint16_t prev, uint16_t now)
+// Тревоги BMS с защитой от «дребезга». Тревога может мигать десятки раз в час (ячейка дошла до порога,
+// BMS отсекла заряд, напряжение просело, тревога снялась…) — раньше это давало сотни сообщений за ночь.
+//  - биты из ALARM_SILENT_MASK в Telegram не отправляются вовсе (видны в /status);
+//  - одна и та же тревога — не чаще раза в ALARM_REPEAT_S;
+//  - «снята» — только если тревога пропала на ALARM_CLEAR_S и о её появлении сообщали.
+static void alarms_tick(uint16_t alarms, int64_t now)
 {
-    uint16_t added = now & ~prev;
-    if (added) {
-        char buf[256] = "🚨 Тревога BMS:";
-        for (int b = 0; b < 16; b++) {
-            if (added & (1u << b)) strappend(buf, sizeof(buf), "\n• %s", jk_bms_alarm_name(b));
-        }
-        tg_send(buf);
-    } else if (prev && !now) {
-        tg_send("✅ Тревоги BMS сняты");
+    static uint16_t active;              // тревоги с учётом задержки снятия
+    static uint16_t reported;            // о появлении сообщили в текущем эпизоде
+    static int64_t  last_sent[16];
+    static int64_t  gone_since[16];
+    static bool     init;
+    if (!init) {
+        for (int b = 0; b < 16; b++) last_sent[b] = INT64_MIN / 2;
+        init = true;
     }
+
+    char added[256] = "", cleared[256] = "";
+    for (int b = 0; b < 16; b++) {
+        const uint16_t bit = 1u << b;
+        if (alarms & bit) {
+            gone_since[b] = 0;
+            if (active & bit) continue;
+            active |= bit;
+            if ((ALARM_SILENT_MASK & bit) || now - last_sent[b] < ALARM_REPEAT_S) continue;
+            ESP_LOGW(TAG, "тревога BMS: %s", jk_bms_alarm_name(b));
+            last_sent[b] = now;
+            reported |= bit;
+            strappend(added, sizeof(added), "\n• %s", jk_bms_alarm_name(b));
+        } else if (active & bit) {
+            if (!gone_since[b]) gone_since[b] = now;
+            if (now - gone_since[b] < ALARM_CLEAR_S) continue;
+            active &= ~bit;
+            if (reported & bit) {
+                ESP_LOGI(TAG, "тревога BMS снята: %s", jk_bms_alarm_name(b));
+                reported &= ~bit;
+                strappend(cleared, sizeof(cleared), "\n• %s", jk_bms_alarm_name(b));
+            }
+        }
+    }
+    if (added[0])   tg_notify("🚨 Тревога BMS:%s", added);
+    if (cleared[0]) tg_notify("✅ Тревога BMS снята:%s", cleared);
 }
 
 static void control_task(void *arg)
@@ -145,7 +175,6 @@ static void control_task(void *arg)
     int64_t      test_until_s = 0;              // тестовое включение реле с веб-страницы
     grid_state_t grid_cand = GRID_UNKNOWN;
     int64_t      grid_cand_since = 0;
-    uint16_t     last_alarms = 0;
     bool         bms_lost_sent = false, bms_never_sent = false, boot_sent = false;
     bool         warn_rt_sent = false, warn_soc_sent = false;
     int64_t      last_tick_us = esp_timer_get_time();
@@ -212,10 +241,7 @@ static void control_task(void *arg)
         }
 
         if (st.bms_ok) {
-            if (st.bms.alarms != last_alarms) {
-                notify_alarms(last_alarms, st.bms.alarms);
-                last_alarms = st.bms.alarms;
-            }
+            alarms_tick(st.bms.alarms, now);
 
             const float v = st.bms.voltage_mv / 1000.0f;
             const float discharge_a = st.bms.current_ma < 0 ? -st.bms.current_ma / 1000.0f : 0.0f;

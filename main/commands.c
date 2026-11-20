@@ -88,12 +88,20 @@ static void cmd_status(char *o, size_t n)
         strappend(o, n, "📉 За это отключение: %.2f кВт·ч\n", s.outage_wh / 1000.0f);
     }
 
-    if (b->alarms) {
+    const uint16_t loud = b->alarms & ~ALARM_SILENT_MASK, quiet = b->alarms & ALARM_SILENT_MASK;
+    if (loud) {
         strappend(o, n, "🚨 Тревоги:");
         for (int i = 0; i < 16; i++) {
-            if (b->alarms & (1u << i)) strappend(o, n, " %s;", jk_bms_alarm_name(i));
+            if (loud & (1u << i)) strappend(o, n, " %s;", jk_bms_alarm_name(i));
         }
         strappend(o, n, "\n");
+    }
+    if (quiet) {
+        strappend(o, n, "ℹ️ BMS:");
+        for (int i = 0; i < 16; i++) {
+            if (quiet & (1u << i)) strappend(o, n, " %s;", jk_bms_alarm_name(i));
+        }
+        strappend(o, n, " (BMS сама отсекает заряд по ячейке)\n");
     }
     if (!s.time_valid) strappend(o, n, "🕒 Время не синхронизировано — ночной тариф не учитывается\n");
 }
