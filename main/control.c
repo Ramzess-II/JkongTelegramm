@@ -15,6 +15,7 @@
 #include "settings.h"
 #include "ota.h"
 #include "diag.h"
+#include "nvs.h"
 
 static const char *TAG = "control";
 
@@ -39,6 +40,42 @@ static int64_t    s_test_req_until_s;
 
 #define RELAY_TEST_MAX_S 600
 
+// «Реле всегда включено» (веб-страница). Отдельный ключ NVS, чтобы не менять формат настроек.
+#define HOLD_NVS_NS  "control"
+#define HOLD_NVS_KEY "hold"
+static bool s_hold_boot;          // прочитано из NVS при старте
+static bool s_hold_req;
+static bool s_hold_req_val;
+
+static bool hold_load(void)
+{
+    nvs_handle_t h;
+    uint8_t v = 0;
+    if (nvs_open(HOLD_NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        nvs_get_u8(h, HOLD_NVS_KEY, &v);
+        nvs_close(h);
+    }
+    return v != 0;
+}
+
+static void hold_save(bool on)
+{
+    nvs_handle_t h;
+    if (nvs_open(HOLD_NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_u8(h, HOLD_NVS_KEY, on ? 1 : 0);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+void control_set_hold(bool on)
+{
+    hold_save(on);
+    xSemaphoreTake(s_mux, portMAX_DELAY);
+    s_hold_req_val = on;
+    s_hold_req = true;
+    xSemaphoreGive(s_mux);
+}
+
 int64_t control_now_s(void) { return esp_timer_get_time() / 1000000; }
 
 const char *control_reason_str(chg_reason_t r)
@@ -48,6 +85,7 @@ const char *control_reason_str(chg_reason_t r)
     case CHG_RESERVE: return "мало резерва на отключение";
     case CHG_FORCE:   return "аварийно низкое напряжение";
     case CHG_MANUAL:  return "ручной режим";
+    case CHG_HOLD:    return "включено постоянно (веб-страница)";
     default:          return "—";
     }
 }
@@ -170,6 +208,8 @@ static void control_task(void *arg)
     st.grid = GRID_UNKNOWN;
     st.grid_since_s = control_now_s();
     st.bms_last_ok_s = -1000000;
+    st.relay_hold = s_hold_boot;
+    if (st.relay_hold) ESP_LOGW(TAG, "реле в режиме «всегда включено» (веб-страница)");
 
     int64_t      relay_switched_s = -1000000;
     int64_t      test_until_s = 0;              // тестовое включение реле с веб-страницы
@@ -197,6 +237,14 @@ static void control_task(void *arg)
         }
         bool reset_profile = s_profile_reset_req;
         s_profile_reset_req = false;
+        if (s_hold_req) {
+            s_hold_req = false;
+            if (st.relay_hold != s_hold_req_val) {
+                st.relay_hold = s_hold_req_val;
+                relay_switched_s = -1000000;    // переключить сразу, без паузы в минуту
+                ESP_LOGW(TAG, "«реле всегда включено»: %s (веб-страница)", st.relay_hold ? "ВКЛ" : "ВЫКЛ");
+            }
+        }
         if (s_test_req) {
             test_until_s = s_test_req_until_s;
             s_test_req = false;
@@ -346,7 +394,12 @@ static void control_task(void *arg)
             if (vmv >= CHG_OFF_mV)          st.full_latched = true;
             else if (vmv <= CHG_ON_mV)  st.full_latched = false;
 
-            if (st.mode == MODE_MANUAL_OFF) {
+            if (st.relay_hold) {
+                // «Всегда включено» с веб-страницы: пороги, ночь, резерв и команды бота не действуют.
+                // Ячейки от перезаряда защищает BMS.
+                want = true;
+                reason = CHG_HOLD;
+            } else if (st.mode == MODE_MANUAL_OFF) {
                 urgent = true;
                 off_why = "ручное выключение";
             } else if (vmv >= CHG_OFF_mV) {
@@ -378,6 +431,7 @@ static void control_task(void *arg)
                     case CHG_NIGHT:  off_why = "закончился ночной тариф"; break;
                     case CHG_MANUAL: off_why = "ручной режим закончился"; break;
                     case CHG_FORCE:  off_why = "напряжение поднялось выше аварийного"; break;
+                    case CHG_HOLD:   off_why = "снята галочка «всегда включено» на веб-странице"; break;
                     default:         off_why = "резерв набран"; break;
                     }
                 }
@@ -441,6 +495,8 @@ void control_start(void)
 
     s_mux = xSemaphoreCreateMutex();
     s_pub.grid = GRID_UNKNOWN;
+    s_hold_boot = hold_load();
+    s_pub.relay_hold = s_hold_boot;
     ESP_ERROR_CHECK(jk_bms_init());
     xTaskCreate(control_task, "control", 6144, NULL, 6, NULL);
 }

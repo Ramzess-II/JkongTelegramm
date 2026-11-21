@@ -62,6 +62,7 @@ static void cmd_status(char *o, size_t n)
 
     strappend(o, n, "🔁 Заряд: %s", s.relay_on ? "ВКЛ" : "выкл");
     if (s.relay_on) strappend(o, n, " (%s)", control_reason_str(s.reason));
+    if (s.relay_hold) strappend(o, n, "\n📌 Реле включено постоянно (галочка на веб-странице)");
     const char *blk = s.relay_on ? NULL : control_block_reason(&s);
     if (blk && (s.mode == MODE_MANUAL_ON || s.grid != GRID_OFF)) strappend(o, n, "\n⛔ Не включается: %s", blk);
     if (s.mode != MODE_AUTO) {
@@ -216,5 +217,13 @@ void commands_handle(const char *cmd, const char *args, char *o, size_t n)
         strappend(o, n, "Профиль потребления сброшен");
     } else {
         strappend(o, n, "Не знаю такой команды. /help — список");
+    }
+
+    if (!strcmp(cmd, "/charge_on") || !strcmp(cmd, "/charge_off") || !strcmp(cmd, "/auto")) {
+        app_status_t s;
+        control_get_status(&s);
+        if (s.relay_hold)
+            strappend(o, n, "\n\n📌 На веб-странице стоит галочка «Реле всегда включено» — пока она стоит, "
+                            "команда не действует. Снять её можно только на веб-странице.");
     }
 }

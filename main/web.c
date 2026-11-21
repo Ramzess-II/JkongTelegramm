@@ -180,16 +180,22 @@ static void bms_diag_block(httpd_req_t *req)
                "<div class=h>Последний ответ: <span id=braw style='font-family:monospace;word-break:break-all'></span></div>"
                "<div id=bdata style='margin-top:8px;line-height:1.6'></div></fieldset>",
           BMS_UART_TX_PIN, BMS_UART_RX_PIN, BMS_UART_BAUD);
-    sendf(req, "<fieldset><legend>Реле зарядки (проверка)</legend>"
-               "<div>Пин GPIO%d: <b id=rpin>…</b> <span id=rinfo class=h></span></div>"
-               "<div class=row style='margin-top:8px'>"
-               "<div><button type=button onclick='rt(10)'>Вкл на 10 с</button></div>"
-               "<div><button type=button onclick='rt(300)'>Вкл на 5 мин</button></div>"
-               "<div><button type=button class=sec style='margin-top:0' onclick='rt(0)'>Выключить</button></div></div>"
-               "<div class=t id=rmsg></div>"
-               "<div class=h>Тест работает и без BMS, затем реле само вернётся к автоматике. Не включается, если сети нет "
-               "или батарея заряжена. При включённом заряде ток в блоке выше должен стать положительным.</div></fieldset>",
-          RELAY_PIN);
+    sendf(req, "<fieldset><legend>Реле зарядки</legend>"
+               "<div>Пин GPIO%d: <b id=rpin>…</b> <span id=rinfo class=h></span></div>", RELAY_PIN);
+    httpd_resp_sendstr_chunk(req,
+        "<label style='display:flex;gap:10px;align-items:center;margin:10px 0 2px;font-size:16px;color:inherit'>"
+        "<input type=checkbox id=rhold style='width:22px;height:22px' onchange='rh(this)'> <b>Реле всегда включено</b></label>"
+        "<div class=h>Пороги заряда, ночной тариф, резерв и команды бота не действуют — заряд идёт постоянно, "
+        "от перезаряда ячеек защищает только BMS. Без сети или без связи с BMS реле всё равно выключится и "
+        "включится снова, когда они вернутся. Сохраняется после перезагрузки. Управление только здесь.</div>"
+        "<div style='margin-top:12px;font-weight:600'>Проверка</div>"
+        "<div class=row style='margin-top:4px'>"
+        "<div><button type=button onclick='rt(10)'>Вкл на 10 с</button></div>"
+        "<div><button type=button onclick='rt(300)'>Вкл на 5 мин</button></div>"
+        "<div><button type=button class=sec style='margin-top:0' onclick='rt(0)'>Выключить</button></div></div>"
+        "<div class=t id=rmsg></div>"
+        "<div class=h>Тест работает и без BMS, затем реле само вернётся к автоматике. Не включается, если сети нет "
+        "или батарея заряжена. При включённом заряде ток в блоке выше должен стать положительным.</div></fieldset>");
     httpd_resp_sendstr_chunk(req,
         "<script>(function(){var R=["
         "['Опроса ещё не было',''],"
@@ -214,7 +220,9 @@ static void bms_diag_block(httpd_req_t *req)
         "' · битых: '+j.bf+(j.ec?' · эхо: '+j.ec:'')+' · байт в последнем: '+j.n;"
         "$('braw').textContent=j.raw||'—';"
         "$('rpin').textContent=j.rp?'ВКЛ (высокий уровень)':'ВЫКЛ';$('rpin').style.color=j.rp?'#1a7f37':'';"
-        "$('rinfo').textContent=j.rt>0?'· тест, осталось '+j.rt+' с':j.rl?'· включено автоматикой':'';"
+        "$('rinfo').textContent=j.rt>0?'· тест, осталось '+j.rt+' с':j.rh?(j.rp?'· всегда включено':"
+        "'· всегда включено, но сейчас выключено: нет сети или связи с BMS'):j.rl?'· включено автоматикой':'';"
+        "if(!hb)$('rhold').checked=!!j.rh;"
         "if(!j.ever){$('bdata').innerHTML='';return}"
         "var h='<b>'+f(j.v,2)+' В</b> · SOC '+j.soc+'% · '+(j.i>0?'+':'')+f(j.i,2)+' А';"
         "h+='<br>Температуры: MOS '+j.t[0]+' °C, T1 '+j.t[1]+' °C, T2 '+j.t[2]+' °C';"
@@ -227,6 +235,13 @@ static void bms_diag_block(httpd_req_t *req)
         "'\">'+(k+1)+': '+f(v/1000,3)+'</div>'});h+='</div>'}"
         "$('bdata').innerHTML=h;"
         "}).catch(function(){$('bst').textContent='Нет связи с устройством';$('bst').style.color='#cf222e'})}"
+        "var hb=false;"
+        "window.rh=function(e){var on=e.checked,m=$('rmsg');"
+        "if(on&&!confirm('Держать реле зарядки включённым постоянно?\\n\\nПороги заряда, ночной тариф и резерв перестанут "
+        "действовать, от перезаряда защищает только BMS.')){e.checked=false;return}"
+        "hb=true;m.textContent='…';fetch('/relay',{method:'POST',body:'hold='+(on?1:0)}).then(function(r){return r.text()})"
+        ".then(function(t){m.textContent=t;hb=false;setTimeout(up,1200)})"
+        ".catch(function(){m.textContent='Нет связи с устройством';hb=false;e.checked=!on})};"
         "window.rt=function(s){var m=$('rmsg');m.textContent='…';"
         "fetch('/relay',{method:'POST',body:'s='+s}).then(function(r){return r.text()})"
         ".then(function(t){m.textContent=t;setTimeout(up,1200)}).catch(function(){m.textContent='Нет связи с устройством'})};"
@@ -251,12 +266,12 @@ static esp_err_t h_bms(httpd_req_t *req)
     if (g.last_bytes > g.raw_len) strappend(raw, sizeof(raw), " …");
 
     strappend(b, size, "{\"res\":%d,\"polls\":%lu,\"ok\":%lu,\"nr\":%lu,\"gb\":%lu,\"bf\":%lu,\"ec\":%lu,"
-                       "\"n\":%u,\"raw\":\"%s\",\"ever\":%s,\"ago\":%lld,\"rl\":%d,\"rp\":%d,\"rt\":%d",
+                       "\"n\":%u,\"raw\":\"%s\",\"ever\":%s,\"ago\":%lld,\"rl\":%d,\"rp\":%d,\"rt\":%d,\"rh\":%d",
               (int)g.last, (unsigned long)g.polls, (unsigned long)g.ok, (unsigned long)g.no_reply,
               (unsigned long)g.garbage, (unsigned long)g.bad_frame, (unsigned long)g.echo,
               g.last_bytes, raw, s.bms_ever ? "true" : "false",
               s.bms_ever ? (long long)(s.now_s - s.bms_last_ok_s) : -1LL,
-              s.relay_on, s.relay_pin, s.relay_test_left_s);
+              s.relay_on, s.relay_pin, s.relay_test_left_s, s.relay_hold);
     if (s.bms_ever) {
         const jk_bms_data_t *d = &s.bms;
         strappend(b, size, ",\"v\":%.3f,\"i\":%.2f,\"soc\":%u,\"t\":[%d,%d,%d],\"cap\":%lu,\"cyc\":%u,"
@@ -303,13 +318,25 @@ static esp_err_t h_log(httpd_req_t *req)
 
 static int read_body(httpd_req_t *req, char *buf, size_t size);
 
-// POST /relay, тело "s=<секунд>": тестовое включение реле, 0 — выключить
+// POST /relay:
+//   "s=<секунд>" — тестовое включение реле, 0 — выключить тест;
+//   "hold=1|0"   — «реле всегда включено» (только отсюда, из Telegram нельзя).
 static esp_err_t h_relay(httpd_req_t *req)
 {
     if (!check_auth(req)) return ESP_OK;
     char body[32];
-    float sec = 0;
-    if (read_body(req, body, sizeof(body)) < 0 || !form_num(body, "s", &sec)) {
+    float sec = 0, hold = 0;
+    const bool got = read_body(req, body, sizeof(body)) >= 0;
+    if (got && form_num(body, "hold", &hold)) {
+        const bool on = hold > 0.5f;
+        control_set_hold(on);
+        ESP_LOGW(TAG, "«реле всегда включено»: %s", on ? "ВКЛ" : "ВЫКЛ");
+        httpd_resp_set_type(req, "text/plain; charset=utf-8");
+        httpd_resp_sendstr(req, on ? "✅ Реле включено постоянно. Снимите галочку, чтобы вернуть автоматику."
+                                   : "Реле вернулось к автоматике");
+        return ESP_OK;
+    }
+    if (!got || !form_num(body, "s", &sec)) {
         httpd_resp_set_status(req, "400 Bad Request");
         httpd_resp_set_type(req, "text/plain; charset=utf-8");
         httpd_resp_sendstr(req, "Неверный запрос");

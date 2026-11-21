@@ -9,7 +9,7 @@
 #include "jk_bms.h"
 
 typedef enum { GRID_UNKNOWN, GRID_ON, GRID_OFF } grid_state_t;
-typedef enum { CHG_NONE, CHG_NIGHT, CHG_RESERVE, CHG_FORCE, CHG_MANUAL } chg_reason_t;
+typedef enum { CHG_NONE, CHG_NIGHT, CHG_RESERVE, CHG_FORCE, CHG_MANUAL, CHG_HOLD } chg_reason_t;
 typedef enum { MODE_AUTO, MODE_MANUAL_ON, MODE_MANUAL_OFF } chg_mode_t;
 
 typedef struct {
@@ -24,6 +24,7 @@ typedef struct {
     bool          relay_on;         // решение логики заряда
     bool          relay_pin;        // что реально выставлено на пине (с учётом теста)
     int           relay_test_left_s;// >0 — идёт тестовое включение с веб-страницы
+    bool          relay_hold;       // «реле всегда включено» (галочка на веб-странице, хранится в NVS)
     chg_reason_t  reason;
     bool          full_latched;     // дошли до CHG_OFF_mV, ждём падения до CHG_RESTART_mV
     chg_mode_t    mode;
@@ -49,6 +50,11 @@ void        control_reset_profile(void);
 // Работает и без BMS, но не при пропаже сети и не при заряженной батарее.
 // Возвращает NULL или текст, почему нельзя.
 const char *control_relay_test(int seconds);
+// «Реле всегда включено» — только с веб-страницы. Пороги заряда, ночь и резерв не действуют
+// (от перезаряда ячеек защищает BMS), но failsafe остаётся: нет BMS или нет сети → реле выключено.
+// Сохраняется в NVS и переживает перезагрузку.
+void        control_set_hold(bool on);
+
 // Почему заряд сейчас нельзя включить (failsafe/заряжена); NULL — можно
 const char *control_block_reason(const app_status_t *s);
 const char *control_reason_str(chg_reason_t r);
